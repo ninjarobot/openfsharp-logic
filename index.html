@@ -1,0 +1,792 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>Logic in my FP</title>
+
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/white.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+                <section data-markdown data-separator="---" data-separator-vertical="~~~">
+
+### You Got Logic in my Functional Programming
+
+**Dave Curylo**
+
+* http://github.com/ninjarobot
+* @i_no_see_pound
+
+
+~~~
+
+## About Me
+
+* Languages nerd
+* Member of the FSSF Board of Trustees
+* Lurker on the FSSF Slack
+* `fsharp` and `swipl` official Docker images
+* Introduced F# at Virtustream, a part of Dell Technologies
+* Living in Atlanta with wife and kids
+
+---
+
+## Goal
+
+* Gain an understanding of logic programming
+* See the types of problems that it can solve
+* Add to your F# knowledge
+
+---
+
+### Problem: Automated System Recovery
+
+#### Failures
+
+* Hardware
+* Operating System
+* Application
+
+**Automated Recovery**
+
+1. Restart the machine
+2. Initialize the OS
+3. Start the application
+
+Note:
+A system can have all sorts of failures between the hardware, operating system,
+and application.  For any of the various failure modes, we want to be able to
+determine an action that can be taken automatically to recover.
+
+If we are in one state and want to get to a different state, then we need to
+determine the intermediary state and the transitions it will take to go between
+them.  For example, if the OS is hung and we want to get to a state that the
+application is running, this could be a path to recovery:
+
+
+~~~
+
+## System Recovery in F♯
+
+First, let's model this in F#.
+
+```fsharp
+type BuildStateChanges = MachineState -> MachineState -> SystemAction list
+```
+
+We would want to be able to say:
+
+```fsharp
+let recovery = buildStateChanges OSHung ApplicationRunning
+> recovery : SystemAction list = [ Restart; InitOS; StartApp ]
+```
+
+Now for the types.
+
+Note:
+Using a top down approach, we might define some function type accepting a
+starting state, an ending state, and returning a list of the actions it will
+take to go through some states to get there.
+
+~~~
+
+### Machine States
+
+Power, OS, and application states
+
+```fsharp
+type MachineState =
+    | PoweredOn
+    | PoweredOff
+    | OsRunning
+    | OsNotRunning
+    | OsHung
+    | AppRunning
+    | AppNotRunning
+    | AppHung
+```
+Note:
+These are states the system may be in at any time.  Some are particular to the
+hardware, like the power state, then there are OS and application states:
+
+
+~~~
+
+### Actions
+
+SystemAction transition the system from one state to another.
+
+```fsharp
+type SystemAction =
+    | PowerOn
+    | PowerOff
+    | Restart
+    | InitOS
+    | ShutdownOS
+    | StartApplication
+    | ShutdownApplication
+    | KillApplication
+```
+
+~~~
+
+### State Transitions
+Next, we want to represent the state transitions.  For example, to go from
+`PoweredOff` to `PoweredOn`, you would perform the `PowerOn` action.
+
+```fsharp
+let stateChangeAction = function
+    | PoweredOff, PoweredOn -> PowerOn
+    | OsNotRunning, PoweredOff -> PowerOff
+    | OsNotRunning, OsRunning -> InitOS
+    | OsHung, OsRunning -> Restart
+    | OsRunning, OsNotRunning -> ShutdownOS
+    | AppNotRunning, AppRunning -> StartApplication
+    | AppRunning, AppNotRunning -> ShutdownApplication
+    | AppHung, AppNotRunning -> KillApplication
+```
+
+~~~
+
+### Types Ready, Now the Implementation
+
+Function for the list of actions to change between states.
+
+```fsharp
+type BuildStateChanges = MachineState -> MachineState -> SystemAction list
+```
+
+Note:
+We want a function that can give us the list of actions to change states and get
+the system into a healthy state again.
+
+~~~
+
+### Determine the State Transitions
+
+Try all the possible states and accumulate changes?
+
+```fsharp
+let possibleStates = [PoweredOn; PoweredOff; OsRunning; OsNotRunning; AppRunning; AppNotRunning]
+
+// Recursively walk back from the final state, to the first state.
+let rec buildStateChanges previous finish (acc:SystemAction list) : SystemAction list =
+    if previous = finish then
+        acc
+    else
+        // We need to recursively build a list, but we need to try all the
+        // possible states.  Gets ugly fast - this doesn't work yet.
+        possibleStates |> List.map (fun possibleState ->
+            let action = stateChangeAction (possibleState, previous)
+            buildStateChanges possibleState finish action::acc
+        )
+```
+
+Note:
+We could take our starting state, then look at the list of all
+possible states (that we want to go to), and try them, just accumulating the
+changes at each step.
+
+~~~
+
+### That got messy fast
+
+Maybe there is another tool for the job?
+
+Note:
+If we keep going, this means manually iterating through all the possible states
+and recursively building a tree out of the possibilities.  And then we can
+walk that tree to find the shortest path.
+
+---
+
+### Logic Programming
+
+Logic programming is code written of rules and facts, in logical form.
+
+* Define things that are `true`
+* Define rules for relationships between `true` clauses.
+
+Note:
+In Prolog, you
+define things that are `true` and send the Prolog engine off to find solutions
+that fit your query that are `true` statements.
+
+~~~
+
+### Terms
+
+```fsharp
+type Operator =
+    | Infix of Term * string * Term
+    | Prefix of string * Term
+    | Postfix of Term * string
+
+and Term =
+    | Atom of string
+    | Number of decimal
+    | Variable of Name:string
+    | ListTerm of Term list
+    | CompoundTerm of Functor:string * Terms:Term seq
+    | DictTerm of Map<string, Term>
+    | Operator of Operator
+```
+
+Note:
+The language is conceptually simple.  The fundamental building blocks are `terms`, which represent everything in an application.  All of the data is defined in terms, operators are terms, predicates and logic are also terms.
+
+~~~
+
+### Atom
+
+* `hello`
+* `'Hello, my name is Jeff.'`
+* `super_power`
+* `+`
+
+Note:
+An `atom` is effectively a fixed string that you would use in a larger predicate.  Many common operators are also just atoms that have been assigned to an operator.
+
+~~~
+
+### Number
+
+* `42`
+* `99.9999999`
+
+Note:
+A `number` is a constant number, and may be an integer or floating point number.
+
+~~~
+
+### Variable
+
+Binds to values in a solution that satisfies a rule.
+
+* `Who`
+* `Total`
+* `WHATEVER`
+
+Note:
+A `variable` is a reference to solutions to a Prolog query.  It will bind to whatever it possibly can to make a query `true`.  It's very important to keep in mind that a term starting with a capital letter is considered a variable.  If you want a capitalized string to be a prolog atom, surround it in single quotes.
+
+~~~
+
+### List
+
+* `[a, b, c, d, e]`
+* `[cat]`
+* `[]`
+
+Note:
+A `list` is a an unordered set of terms, with a head and a tail, or just an empty list.  Unlike F#, a list in Prolog can contain different types, although this is because it's a dynamically typed language, and not anything special about this list itself.
+
+
+~~~
+
+### Compound Term
+
+A name (functor) and arguments.
+
+* `birthplace(melissa, sacramento)`
+* `length(2)`
+* `rectangle(length(Length), width(Width))`
+* `area(rectangle(length(Length), width(Width)), Area)`
+
+Note:
+A `compound term` is a named structure.  It could be thought of as a named tuple or, maybe more appropriately, a functor with some number of arguments (its arity).
+
+~~~
+
+### Operator
+
+Syntactic sugar to position some notation more naturally.
+
+* `>` - logical greater than
+* `+` - addition
+* `,` - logical conjunction, also known as `and`
+* `;` - logical disjunction, also known as `or`
+* `.` - terminates a statement
+* `:-` - if
+
+Note:
+An `operator` is a term that has been defined as an operator to shorten the notation and make the language more natural by having prefix, postfix, or infix notation.  For example, instead of writing `+(40, 2)`, the `+` has been defined an an infix operator, so it can be used as `40 + 2`.  Here are some common operators:
+
+~~~
+
+### Prolog is Terms
+
+The Prolog language is represented by these terms.
+
+```fsharp
+type Term =
+    | Atom of string
+    | Number of decimal
+    | Variable of Name:string
+    | ListTerm of Term list
+    | CompoundTerm of Functor:string * Terms:Term seq
+    | DictTerm of Map<string, Term>
+    | Operator of Operator
+```
+
+Note:
+That's it.  The whole language is terms, and you can represent everything in prolog with these types of terms.  There are whole frameworks full of predefined terms, like builtin operators and predicates, but these are the fundamental building blocks for the entire language.
+
+
+~~~
+
+### Facts
+
+Those might represent the state of a machine:
+* powered on
+* the OS is running
+* the application is running
+
+```prolog
+machine_state(powered_on, os_running, application_running).
+machine_state(powered_on, os_running, application_not_running).
+machine_state(powered_on, os_not_running, application_not_running).
+```
+
+Note:
+A fact defines that something is `true` for Prolog.  Any term followed by a
+period is a fact.  Below, we have a compound term with an "arity" of 3 named
+`machine_state/3` and containing three atoms.
+
+~~~
+
+### Rules
+
+What is our power state in terms of application state?
+
+```prolog
+power_state(ApplicationState, PowerState) :-
+machine_state(PowerState, _, ApplicationState).
+```
+
+Obviously if the application is running, the power is on.
+
+```
+?- power_state(application_running, PowerState).
+PowerState = powered_on.
+```
+
+Note:
+A rule defines a relationship between some facts, and it's defined as a some
+term followed by an operator `:-` that says that the condition on the left holds
+true if the condition on the right holds true.
+
+~~~
+
+### Relationships
+
+The rule relates the power state to the application state, also
+there are various application states that make the inverse true:
+
+```prolog
+?- power_state(ApplicationState, powered_on).
+ApplicationState = application_running ;
+ApplicationState = application_not_running ;
+ApplicationState = application_not_running.
+```
+
+Note:
+Prolog solved for the various values of ApplicationState than can occur if a
+machine is powered on.  We got an extra because prolog backtracked through it's
+knowledgebase looking for all solutions.
+
+---
+
+### Prolog System Recovery Planning
+
+A state transition
+
+`system_action/3` term:
+* Initial state
+* Action to move it to another state
+* Final state.
+
+```prolog
+% machine_state(Hardware, OperatingSystem, Application)
+system_action(
+    machine_state(powered_off, _, _),
+    power_on,
+    machine_state(powered_on, os_not_running, application_not_running)
+    ).
+```
+
+Note:
+Prolog is entirely declarative.  We will define our state transitions as rules,
+and leave the iteration up to the machine.
+
+~~~
+### All the recovery actions
+
+```prolog
+system_action(machine_state(off, not_running, not_running),
+    power_on,
+    machine_state(on, not_running, not_running)).
+system_action(machine_state(on, _, _),
+    power_off,
+    machine_state(off, not_running, not_running)).
+system_action(machine_state(on, not_running, not_running),
+    init_os,
+    machine_state(on, running, not_running)).
+system_action(machine_state(on, hung, _),
+    restart,
+    machine_state(on, running, not_running)).
+system_action(machine_state(on, running, _),
+    shutdown_os,
+    machine_state(on, not_running, not_running)).
+system_action(machine_state(on, running, not_running),
+    start_application,
+    machine_state(on, running, running)).
+system_action(machine_state(on, running, running),
+    shutdown_application,
+    machine_state(on, running, not_running)).
+system_action(machine_state(on, running, hung),
+    kill_application,
+    machine_state(on, running, not_running)).
+```
+
+~~~
+
+### Build Recovery Plans
+
+The `server_management/3` rule is defined to recursivly build a plan to move
+between states.
+
+```prolog
+% Already in this state, do nothing.
+server_management(State, State, []).
+% Otherwise, find the first action and recursively build the rest of the plan
+server_management(State1, GoalState, [Action1 | RestOfPlan]) :-
+    system_action(State1, Action1, State2), % first action
+    server_management(State2, GoalState, RestOfPlan). % build rest of plan
+
+% Force a breadth first search with append/3 (binds Plan to a growing list)
+build_plan(Start, Finish, Plan) :-
+    append(Plan, _, _),
+    server_management(Start, Finish, Plan).
+```
+
+~~~
+
+### Looks Weird, Please Explain, page 1 of 3
+
+```prolog
+server_management(State, State, []).
+```
+
+* A fact that says that when the initial and final states match, the
+plan is empty.
+* A terminating condition when prolog recursively searches for solutions.
+
+~~~
+### Looks Weird, Please Explain, page 2 of 3
+
+Prepending the list.
+
+```
+server_management(State1, GoalState, [Action1 | RestOfPlan]) :-
+```
+
+You can `cons` a Prolog list similar to the F# technique: `Head::Tail` instead with `[ Head | Tail ]`.
+
+Note:
+Prolog will try to unify the Head of the list from the predicate, `Action1` when
+solving for the body of the rule.  That means that when it solves for `Action1`
+in the body, it will become the head of the list passed into the third argument to `server_management`.
+
+Same for the tail, `RestOfPlan`.
+
+~~~
+### Looks Weird, Please Explain, page 3 of 3
+
+Recursing through states.
+
+```
+system_action(State1, Action1, State2), % first action
+server_management(State2, GoalState, RestOfPlan). % build rest of plan
+```
+
+Note:
+It finds an action in the database that will take it from one state to a new
+state, then recursively calls itself, to find an action that will take it from
+the new state to a third state.
+
+It's going to recurse until it ends up on the terminating condition, where
+there's nothing more to plan.  Then it pops out, putting the `Action` on
+`RestOfPlan`, going from an empty list to prepending each action up through the
+stack, building up the plan in reverse.
+
+~~~
+
+### WAT???
+
+```prolog
+server_management(State, State, []).
+% Otherwise, find the first action and recursively build the rest of the plan
+server_management(State1, GoalState, [Action1 | RestOfPlan]) :-
+    system_action(State1, Action1, State2), % first action
+    server_management(State2, GoalState, RestOfPlan). % build rest of plan
+```
+
+Note:
+1. Recurse until you have an empty list.  This will happen when `State2` =
+`GoalState`.  In our knowledgebase, we can see that `application_running` is
+an end state only after the action `start_application`.
+
+`Action1` = `start_application` becomes the head of the list
+`State1` = `state(on, running, not_running)`
+`State2` = `state(on, running, running)`
+
+2. Now our list has [`start_application`], so `start_application` is the head
+3. Look for a `system_action` that has that `Action1` and `State2` (there might
+be more than 1).
+
+`Action1` = `init_os` becomes the head of the list
+`State1` = `state(on, not_running, not_running)`
+`State2` = `state(on, on_running, not_running)`
+
+4. Unifying `Action1` here results in a list like `[ init_os, start_application ]`
+5. Keep popping out of the recursive stack.
+
+---
+
+### It Works!
+
+```
+?- build_plan(state(off, _, not_running), state(_, _, running), Plan).
+Plan = [power_on, init_os, start_application] ;
+Plan = [power_on, power_off, power_on, init_os, start_application] ;
+Plan = [power_on, init_os, shutdown_os, init_os, start_application] ;
+Plan = [power_on, init_os, start_application, shutdown_application, start_application] ;
+Plan = [power_on, init_os, power_off, power_on, init_os, start_application] ;
+Plan = [power_on, init_os, start_application, shutdown_os, init_os, start_application] .
+```
+
+Note:
+The plans get a little crazy as we tell it to find more, but they are valid.
+
+~~~
+
+### Recover from a Hung Application
+
+```
+?- build_plan(state(_, _, hung), state(_, _, running), Plan).
+Plan = [restart, start_application] ;
+Plan = [kill_application, start_application] ;
+Plan = [shutdown_os, init_os, start_application] ;
+Plan = [power_off, power_on, init_os, start_application] ;
+Plan = [restart, shutdown_os, init_os, start_application] .
+```
+
+Note:
+Who hasn't tried these plans?
+
+---
+
+### Can we do this from F#?
+
+You may not want to build your entire system in prolog, just because it can do
+the planning.  You're an F# expert, so let's leverage F#.
+
+* Types for the interface
+* Functions to map to prolog terms
+* Way to call Prolog
+
+~~~
+
+### Machine States to Prolog
+
+We will need to build compound terms for these states:
+
+```fsharp
+type MachineState with
+    member m.Prolog =
+        match m with
+        | PoweredOn ->
+            CompoundTerm("machine_state",
+                [ Atom("on"); Atom("not_running"); Atom("not_running") ])
+        | PoweredOff ->
+            CompoundTerm("machine_state",
+                [ Atom("off"); Atom("not_running"); Atom("not_running") ])
+        | OsRunning ->
+            CompoundTerm("machine_state",
+                [ Atom("on"); Atom("running"); Atom("not_running") ])
+        | OsNotRunning ->
+            CompoundTerm("machine_state",
+                [ Atom("on"); Atom("not_running"); Atom("not_running") ])
+        // ...and so on...
+```
+
+~~~
+
+### Serializing to Prolog
+
+```fsharp
+OsHung.Prolog
+|> Serialization.termToProlog
+|> printfn "%s"
+```
+and it checks out
+```
+machine_state(on, hung, _)
+```
+
+~~~
+
+### Parsing the actions
+
+```fsharp
+type SystemAction with
+    static member Parse = function
+        | "power_on" -> PowerOn |> Ok
+        | "power_off" -> PowerOff |> Ok
+        | "restart" -> Restart |> Ok
+        | "init_os" -> InitOS |> Ok
+        | "shutdown_os" -> ShutdownOS |> Ok
+        | "start_application" -> StartApplication |> Ok
+        | "shutdown_application" -> ShutdownApplication |> Ok
+        | "kill_application" -> KillApplication |> Ok
+        | _ -> Error "Unsupported system action in plan."
+```
+
+~~~
+
+### Interfacing with Prolog
+
+`dotnet add package Pengines.Client`
+
+* Backend for https://swish.swi-prolog.org
+* Sandboxed Prolog engines on isolated threads
+* Web server with JSON over HTTP interface
+
+~~~
+
+### Prolog engine
+
+* SWI-Prolog: http://www.swi-prolog.org/Download.html
+* Pengines: https://github.com/SWI-Prolog/pengines
+
+```
+/Applications/SWI-Prolog.app/Contents/MacOS/swipl run.pl
+```
+
+~~~
+
+### Making the request
+
+```
+let ask = Operators.Fact "build_plan" [initial.Prolog; final.Prolog; Variable("Plan")]
+let! results = 
+    {
+        SrcText = recoveryPlanning
+        Ask = (ask |> Serialization.termToProlog) |> Some
+        Format ="json"
+        Chunk = 5 |> Some // Number of results at a time.
+    }
+    |> Pengine.createPengine penginesUri http
+```
+
+~~~
+
+### Solution Processing
+
+```fsharp
+// If there is an answer, it contains a list of solutions.
+let (|SolutionsList|_|) (answerOpt:Answer option) =
+    match answerOpt with
+    | Some answer ->
+        match answer.Data with
+        | ListTerm solutions -> Some solutions
+        | _ -> None
+    | _ -> None
+```
+
+~~~
+
+### The results
+
+```fsharp
+[Ok [Atom "power_on"; Atom "init_os"; Atom "start_application"];
+Ok
+  [Atom "power_on"; Atom "power_off"; Atom "power_on"; Atom "init_os";
+   Atom "start_application"];
+Ok
+  [Atom "power_on"; Atom "init_os"; Atom "shutdown_os"; Atom "init_os";
+   Atom "start_application"];
+Ok
+  [Atom "power_on"; Atom "init_os"; Atom "start_application";
+   Atom "shutdown_application"; Atom "start_application"];
+Ok
+  [Atom "power_on"; Atom "init_os"; Atom "power_off"; Atom "power_on";
+   Atom "init_os"; Atom "start_application"]]
+```
+    
+    ---
+    ### Improvements
+
+    * Active Patterns
+    * Builders
+    * Operators
+    * Parsing
+    * Type generation
+    * Usage
+    
+Note:
+    * Active Patterns - the matching on solutions is complicated, even for a simple match.  Active patterns can greatly simplify this.
+    * Builders - the syntactic noise for common operations like defining facts could be reduced.
+    * Operators - common operations, like and `,` and or `;` could be built with operators.
+    * Parsing - parse existing prolog and enable a round trip.
+    * Type generation - reduce boilerplate to making a type to map to prolog.
+    * Usage - more users to find the errors and recommend improvements.
+
+~~~
+
+### Resources
+    
+* _Prolog Programming for Artificial Intelligence_ by Ivan Bratko
+* https://swish.swi-prolog.org
+* http://github.com/SWI-Prolog
+* http://github.com/ninjarobot/Pengines.Client
+
+                </section>
+			</div>
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info about config & dependencies:
+			// - https://github.com/hakimel/reveal.js#configuration
+			// - https://github.com/hakimel/reveal.js#dependencies
+			Reveal.initialize({
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } }
+				]
+			});
+		</script>
+	</body>
+</html>
